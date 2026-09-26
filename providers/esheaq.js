@@ -1,0 +1,504 @@
+/** esheaq - Cs-Karma Nuvio port, built 2026-09-26T10:46:30.846Z */
+var __defProp = Object.defineProperty;
+var __defProps = Object.defineProperties;
+var __getOwnPropDescs = Object.getOwnPropertyDescriptors;
+var __getOwnPropSymbols = Object.getOwnPropertySymbols;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __propIsEnum = Object.prototype.propertyIsEnumerable;
+var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __spreadValues = (a, b) => {
+  for (var prop in b || (b = {}))
+    if (__hasOwnProp.call(b, prop))
+      __defNormalProp(a, prop, b[prop]);
+  if (__getOwnPropSymbols)
+    for (var prop of __getOwnPropSymbols(b)) {
+      if (__propIsEnum.call(b, prop))
+        __defNormalProp(a, prop, b[prop]);
+    }
+  return a;
+};
+var __spreadProps = (a, b) => __defProps(a, __getOwnPropDescs(b));
+var __async = (__this, __arguments, generator) => {
+  return new Promise((resolve, reject) => {
+    var fulfilled = (value) => {
+      try {
+        step(generator.next(value));
+      } catch (e) {
+        reject(e);
+      }
+    };
+    var rejected = (value) => {
+      try {
+        step(generator.throw(value));
+      } catch (e) {
+        reject(e);
+      }
+    };
+    var step = (x) => x.done ? resolve(x.value) : Promise.resolve(x.value).then(fulfilled, rejected);
+    step((generator = generator.apply(__this, __arguments)).next());
+  });
+};
+
+// src/shared/http.js
+var DEFAULT_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "tr-TR,tr;q=0.9,en;q=0.8"
+};
+var DEFAULT_TIMEOUT_MS = 15e3;
+function timeoutSignal(ms = DEFAULT_TIMEOUT_MS) {
+  try {
+    if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+      return AbortSignal.timeout(ms);
+    }
+  } catch (e) {
+  }
+  try {
+    if (typeof AbortController === "function" && typeof setTimeout === "function") {
+      const c = new AbortController();
+      const t = setTimeout(() => {
+        try {
+          c.abort();
+        } catch (e) {
+        }
+      }, ms);
+      if (t && typeof t.unref === "function")
+        t.unref();
+      return c.signal;
+    }
+  } catch (e) {
+  }
+  return void 0;
+}
+function withTimeout(promise, ms = DEFAULT_TIMEOUT_MS, label = "") {
+  if (typeof setTimeout !== "function")
+    return Promise.resolve(promise);
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Timeout ${ms}ms${label ? ` (${label})` : ""}`)), ms);
+  });
+  return Promise.race([promise, timeout]).then(
+    (v) => {
+      if (timer)
+        clearTimeout(timer);
+      return v;
+    },
+    (e) => {
+      if (timer)
+        clearTimeout(timer);
+      throw e;
+    }
+  );
+}
+function fetchText(url, referer, extraHeaders) {
+  return __async(this, null, function* () {
+    return yield withTimeout((() => __async(this, null, function* () {
+      const headers = __spreadValues(__spreadValues({}, DEFAULT_HEADERS), extraHeaders || {});
+      if (referer)
+        headers["Referer"] = referer;
+      const res = yield fetch(url, { headers, signal: timeoutSignal(DEFAULT_TIMEOUT_MS) });
+      if (!res.ok)
+        throw new Error(`HTTP ${res.status} ${url}`);
+      return yield res.text();
+    }))(), DEFAULT_TIMEOUT_MS, url);
+  });
+}
+function originOf(url) {
+  const m = String(url || "").match(/^(https?:\/\/[^/]+)/i);
+  return m ? m[1] : "";
+}
+
+// src/shared/cache.js
+function createTtlCache(defaultTtlMs = 30 * 60 * 1e3, maxEntries = 300) {
+  const map = /* @__PURE__ */ new Map();
+  function prune() {
+    const now = Date.now();
+    for (const [k, v] of map) {
+      if (v.exp <= now)
+        map.delete(k);
+    }
+    while (map.size > maxEntries) {
+      const first = map.keys().next().value;
+      map.delete(first);
+    }
+  }
+  return {
+    remember(key, loader, ttlMs, cacheIf) {
+      return __async(this, null, function* () {
+        const now = Date.now();
+        const hit = map.get(key);
+        if (hit && hit.exp > now)
+          return hit.val;
+        const val = yield loader();
+        try {
+          if (cacheIf && !cacheIf(val))
+            return val;
+        } catch (e) {
+        }
+        prune();
+        map.set(key, { val, exp: now + (ttlMs || defaultTtlMs) });
+        return val;
+      });
+    }
+  };
+}
+
+// src/shared/tmdb.js
+var tmdbInfoCache = createTtlCache(30 * 60 * 1e3, 300);
+var DEFAULT_TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
+function getTmdbApiKey() {
+  try {
+    const s = typeof globalThis !== "undefined" ? globalThis.SCRAPER_SETTINGS : null;
+    const k = s && s.tmdbApiKey ? String(s.tmdbApiKey).trim() : "";
+    if (k)
+      return k;
+  } catch (e) {
+  }
+  try {
+    const inj = typeof globalThis !== "undefined" ? globalThis.TMDB_API_KEY : "";
+    if (inj)
+      return String(inj).trim();
+  } catch (e) {
+  }
+  return DEFAULT_TMDB_API_KEY;
+}
+function tmdbApiKeySettingsLayout() {
+  return [
+    { type: "header", label: "TMDB API Anahtari (opsiyonel)" },
+    {
+      type: "text",
+      key: "tmdbApiKey",
+      label: "Kendi TMDB API anahtarin",
+      description: "Bos birakirsan paylasilan varsayilan anahtar kullanilir.",
+      defaultValue: ""
+    }
+  ];
+}
+function getTmdbInfo(tmdbId, mediaType) {
+  return __async(this, null, function* () {
+    const empty = { title: "", originalTitle: "", turkishTitle: "", year: "", imdbId: null };
+    const apiKey = getTmdbApiKey();
+    if (!apiKey)
+      return empty;
+    const type = mediaType === "tv" ? "tv" : "movie";
+    return yield tmdbInfoCache.remember(
+      `${type}:${tmdbId}`,
+      () => __async(this, null, function* () {
+        try {
+          const url = `https://api.themoviedb.org/3/${type}/${tmdbId}?api_key=${apiKey}&append_to_response=external_ids,translations`;
+          const res = yield withTimeout((() => __async(this, null, function* () {
+            const r = yield fetch(url, { signal: timeoutSignal(DEFAULT_TIMEOUT_MS) });
+            if (!r.ok)
+              throw new Error(`TMDB ${r.status}`);
+            return yield r.json();
+          }))(), DEFAULT_TIMEOUT_MS, "tmdb");
+          let turkishTitle = "";
+          const trs = res.translations && res.translations.translations || [];
+          const tr = trs.find((t) => t.iso_3166_1 === "TR" || t.iso_639_1 === "tr");
+          if (tr)
+            turkishTitle = tr.data && (tr.data.title || tr.data.name) || "";
+          return {
+            title: res.name || res.title || res.original_title || "",
+            originalTitle: res.original_title || res.original_name || "",
+            turkishTitle,
+            year: (res.release_date || res.first_air_date || "").slice(0, 4),
+            imdbId: res.external_ids && res.external_ids.imdb_id || res.imdb_id || null
+          };
+        } catch (e) {
+          return empty;
+        }
+      }),
+      30 * 60 * 1e3,
+      (v) => !!(v && (v.title || v.originalTitle || v.imdbId))
+    );
+  });
+}
+
+// src/shared/unpack.js
+function unpackArgs(p, a, c, k, e) {
+  const d = {};
+  e = function(x) {
+    return x.toString(a);
+  };
+  const dec = function(x) {
+    let r = "";
+    if (!x)
+      return 0;
+    for (let i = 0; i < x.length; i++) {
+      const ch = x[i];
+      if (d[ch] === void 0) {
+        const v = e(d[ch] === void 0 ? Object.keys(d).length : d[ch]);
+        d[ch] = v;
+      }
+      r += d[ch] || ch;
+    }
+    return r;
+  };
+  let out = p;
+  const dict = {};
+  const encode = (n) => {
+    if (a <= 36)
+      return n.toString(a);
+    const chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let s = "";
+    do {
+      s = chars[n % a] + s;
+      n = Math.floor(n / a);
+    } while (n > 0);
+    return s;
+  };
+  for (let i = c - 1; i >= 0; i--) {
+    dict[encode(i)] = k[i] || encode(i);
+  }
+  out = out.replace(/\b\w+\b/g, (w) => dict[w] !== void 0 ? dict[w] : w);
+  return out;
+}
+function getAndUnpack(text) {
+  const src = String(text || "");
+  if (!src.includes("eval("))
+    return src;
+  const m = src.match(/eval\(function\(p,a,c,k,e,(?:r|d)?\)\{[^}]*\}\s*\(\s*'([\s\S]*?)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'([\s\S]*?)'\.split\('\|'\)/);
+  if (!m)
+    return src;
+  try {
+    const p = m[1].replace(/\\'/g, "'");
+    const a = parseInt(m[2], 10);
+    const c = parseInt(m[3], 10);
+    const k = m[4].split("|");
+    return unpackArgs(p, a, c, k);
+  } catch (e) {
+    return src;
+  }
+}
+function extractFileUrl(unpackedHtml) {
+  const s = String(unpackedHtml || "");
+  let m = s.match(/file\s*:\s*"([^"]+)"/i);
+  if (m && m[1])
+    return m[1];
+  m = s.match(/file\s*:\s*'([^']+)'/i);
+  if (m && m[1])
+    return m[1];
+  m = s.match(/source\s*:\s*"([^"]+\.m3u8[^"]*)"/i);
+  if (m && m[1])
+    return m[1];
+  m = s.match(/(https?:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*)/i);
+  if (m && m[1])
+    return m[1];
+  return "";
+}
+
+// src/shared/html.js
+function normTitle(s) {
+  return String(s || "").toLowerCase().replace(/&amp;/g, "&").replace(/&#\d+;/g, " ").replace(/[^a-z0-9\u00e7\u011f\u0131\u00f6\u015f\u00fc ]/gi, " ").replace(/\s+/g, " ").trim();
+}
+function normKey(s) {
+  return normTitle(s).replace(/[^a-z0-9]/g, "");
+}
+function scoreCandidate(candTitle, targets, candYear, year) {
+  const ck = normKey(candTitle);
+  let s = 0;
+  for (const t of targets) {
+    const tk = normKey(t);
+    if (!tk)
+      continue;
+    if (ck === tk)
+      s += 3;
+    else if (tk && (ck.includes(tk) || tk.includes(ck)))
+      s += 1;
+  }
+  if (year && candYear && String(candYear) === String(year))
+    s += 1;
+  return s;
+}
+
+// src/esheaq/constants.js
+var MAIN_URL = "https://esheeq.xyz";
+var DOMAIN_CANDIDATES = ["https://esheeq.xyz", "https://esheeq.online"];
+var PROVIDER_ID = "esheaq";
+
+// src/esheaq/index.js
+var REF = `${MAIN_URL}/`;
+function searchLinks(html, base) {
+  const out = [];
+  const re = /<article\b[\s\S]*?<a\b([^>]*)>/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const attrs = m[1] || "";
+    const hm = attrs.match(/href\s*=\s*"([^"]*)"|href\s*=\s*'([^']*)'/i);
+    const tm = attrs.match(/title\s*=\s*"([^"]*)"|title\s*=\s*'([^']*)'/i);
+    const href = hm ? hm[1] || hm[2] : "";
+    const title = tm ? tm[1] || tm[2] : "";
+    if (href && title) {
+      const abs = href.startsWith("http") ? href : base.replace(/\/$/, "") + (href.startsWith("/") ? href : "/" + href);
+      out.push({ title: title.trim(), url: abs });
+    }
+  }
+  return out;
+}
+function parseEpisodes(html, base) {
+  const eps = [];
+  const re = /<article\b[\s\S]*?<a\b([^>]*)>([\s\S]*?)<\/a\s*>/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const attrs = m[1] || "";
+    const inner = m[2] || "";
+    const hm = attrs.match(/href\s*=\s*"([^"]*)"|href\s*=\s*'([^']*)'/i);
+    const tm = attrs.match(/title\s*=\s*"([^"]*)"|title\s*=\s*'([^']*)'/i);
+    const href = hm ? hm[1] || hm[2] : "";
+    if (!href || !href.includes(base.replace("https://", "").split("/")[0]) && !href.startsWith("http") && !href.startsWith("/")) {
+    }
+    const em = inner.match(/episodeNum[\s\S]*?<span[^>]*>\s*<\/span>\s*<span[^>]*>\s*(\d+)\s*<\/span>/i) || inner.match(/(\d+)\s*\.?\s*(b[oö]l[uü]m|episode)/i);
+    const epNum = em ? parseInt(em[1], 10) : null;
+    if (hm && href) {
+      const abs = href.startsWith("http") ? href : base.replace(/\/$/, "") + (href.startsWith("/") ? href : "/" + href);
+      eps.push({ title: tm ? tm[1] || tm[2] : "", url: abs, episode: epNum });
+    }
+  }
+  if (!/id=["']epiList["']/i.test(html))
+    return [];
+  return eps;
+}
+function parseServers(html) {
+  const out = [];
+  const re = /<li\b([^>]*)>/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const attrs = m[1] || "";
+    const d = attrs.match(/data-src\s*=\s*"([^"]*)"|data-src\s*=\s*'([^']*)'/i);
+    if (d && (d[1] || d[2]))
+      out.push((d[1] || d[2]).trim());
+  }
+  return out;
+}
+function parseIframe(html, base) {
+  const m = html.match(/<iframe\b[^>]*src\s*=\s*"([^"]+)"[^>]*>|<iframe\b[^>]*src\s*=\s*'([^']+)'[^>]*>/i);
+  const src = m ? m[1] || m[2] : "";
+  if (!src)
+    return "";
+  if (/^https?:\/\//i.test(src))
+    return src;
+  if (src.startsWith("//"))
+    return "https:" + src;
+  return base.replace(/\/$/, "") + (src.startsWith("/") ? src : "/" + src);
+}
+function resolveVidspeed(iframeUrl) {
+  return __async(this, null, function* () {
+    const page = yield fetchText(iframeUrl, REF);
+    const scriptM = page.match(/<script[^>]*>([\s\S]*?eval\(function[\s\S]*?)<\/script\s*>/i);
+    const unpacked = getAndUnpack(scriptM ? scriptM[1] : page);
+    const file = extractFileUrl(unpacked);
+    if (!file)
+      return null;
+    const url = file.startsWith("http") ? file : originOf(iframeUrl) + (file.startsWith("/") ? file : "/" + file);
+    return { url, referer: iframeUrl };
+  });
+}
+function searchBest(domain, targets, year) {
+  return __async(this, null, function* () {
+    let best = null;
+    for (const q of targets) {
+      let html = "";
+      try {
+        html = yield fetchText(`${domain}/?s=${encodeURIComponent(q)}`, `${domain}/`);
+      } catch (e) {
+        continue;
+      }
+      const links = searchLinks(html, domain);
+      for (const l of links) {
+        const s = scoreCandidate(l.title, targets, "", year);
+        if (!best || s > best.score)
+          best = __spreadProps(__spreadValues({}, l), { score: s });
+      }
+      if (best && best.score >= 3)
+        break;
+    }
+    return best && best.score > 0 ? best : null;
+  });
+}
+function getStreams(tmdbId, mediaType = "movie", season = 1, episode = 1) {
+  return __async(this, null, function* () {
+    try {
+      const type = String(mediaType).toLowerCase() === "tv" ? "tv" : "movie";
+      const info = yield getTmdbInfo(tmdbId, type);
+      const targets = [...new Set([info.title, info.originalTitle, info.turkishTitle].filter(Boolean))];
+      if (!targets.length)
+        return [];
+      for (const domain of DOMAIN_CANDIDATES) {
+        const hit = yield searchBest(domain, targets, info.year);
+        if (!hit)
+          continue;
+        let detail = "";
+        try {
+          detail = yield fetchText(hit.url, `${domain}/`);
+        } catch (e) {
+          continue;
+        }
+        let watchUrl = "";
+        let dispTitle = hit.title;
+        if (type === "tv") {
+          const eps = parseEpisodes(detail, domain);
+          if (!eps.length)
+            continue;
+          const epNo = episode || 1;
+          let ep = eps.find((e) => e.episode === epNo);
+          if (!ep)
+            ep = eps[epNo - 1] || eps[0];
+          if (!ep)
+            continue;
+          watchUrl = ep.url.endsWith("see/") ? ep.url : ep.url.replace(/\/$/, "") + "/see/";
+          dispTitle = `${hit.title} S${season || 1}E${epNo}`;
+        } else {
+          watchUrl = hit.url.replace(/\/$/, "") + "/see/";
+        }
+        let watch = "";
+        try {
+          watch = yield fetchText(watchUrl, hit.url);
+        } catch (e) {
+          continue;
+        }
+        const servers = parseServers(watch);
+        if (!servers.length)
+          continue;
+        const out = [];
+        for (const srv of servers.slice(0, 6)) {
+          try {
+            const srvPage = yield fetchText(srv, `${domain}/`);
+            const iframe = parseIframe(srvPage, originOf(srv) || domain);
+            if (!iframe)
+              continue;
+            const r = yield resolveVidspeed(iframe);
+            if (!r || !r.url)
+              continue;
+            out.push({
+              name: `${PROVIDER_ID} ${/\.m3u8/i.test(r.url) ? "HLS" : "Video"}`,
+              title: dispTitle,
+              url: r.url,
+              quality: "Auto",
+              provider: PROVIDER_ID,
+              type: /\.m3u8/i.test(r.url) ? "m3u8" : "mp4",
+              headers: { "User-Agent": "Mozilla/5.0", "Referer": r.referer, "Origin": originOf(r.referer) }
+            });
+          } catch (e) {
+          }
+        }
+        if (out.length)
+          return out;
+      }
+      return [];
+    } catch (e) {
+      return [];
+    }
+  });
+}
+function onSettings() {
+  return __async(this, null, function* () {
+    return [...tmdbApiKeySettingsLayout()];
+  });
+}
+function getSubtitles() {
+  return __async(this, null, function* () {
+    return [];
+  });
+}
+module.exports = { getStreams, getSubtitles, onSettings };
+module.exports.__test = { searchLinks, parseEpisodes, parseServers, parseIframe, normKey };

@@ -1,0 +1,14 @@
+{
+  "name": "cs-karma-nuvio",
+  "version": "0.1.0",
+  "description": "Cs-Karma Cloudstream provider'larinin Nuvio JS portu (v0.1.0: esheaq, krmzy, yoturkish-beta)",
+  "scripts": {
+    "build": "node build.js",
+    "check:schema": "node scripts/check-stream-schema.js",
+    "test": "node scripts/smoke-test.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.20.0"
+  },
+  "license": "GPL-3.0"
+}
