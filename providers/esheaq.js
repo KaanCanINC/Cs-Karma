@@ -1,4 +1,4 @@
-/** esheaq - Cs-Karma Nuvio port, built 2026-09-26T10:46:30.846Z */
+/** esheaq - Cs-Karma Nuvio port, built 2026-09-26T11:22:58.694Z */
 var __defProp = Object.defineProperty;
 var __defProps = Object.defineProperties;
 var __getOwnPropDescs = Object.getOwnPropertyDescriptors;
@@ -288,11 +288,9 @@ function extractFileUrl(unpackedHtml) {
 }
 
 // src/shared/html.js
-function normTitle(s) {
-  return String(s || "").toLowerCase().replace(/&amp;/g, "&").replace(/&#\d+;/g, " ").replace(/[^a-z0-9\u00e7\u011f\u0131\u00f6\u015f\u00fc ]/gi, " ").replace(/\s+/g, " ").trim();
-}
+var TR_MAP = { "\xE7": "c", "\u011F": "g", "\u0131": "i", "\xF6": "o", "\u015F": "s", "\xFC": "u", "\xE2": "a", "\xEE": "i", "\xFB": "u" };
 function normKey(s) {
-  return normTitle(s).replace(/[^a-z0-9]/g, "");
+  return String(s || "").toLowerCase().replace(/[çğışöüâîû]/g, (c) => TR_MAP[c] || c).replace(/[^a-z0-9]/g, "");
 }
 function scoreCandidate(candTitle, targets, candYear, year) {
   const ck = normKey(candTitle);

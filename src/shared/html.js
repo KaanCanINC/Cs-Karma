@@ -11,8 +11,13 @@ export function normTitle(s) {
     .trim();
 }
 
+const TR_MAP = { 'ç': 'c', 'ğ': 'g', 'ı': 'i', 'ö': 'o', 'ş': 's', 'ü': 'u', 'â': 'a', 'î': 'i', 'û': 'u' };
+
 export function normKey(s) {
-  return normTitle(s).replace(/[^a-z0-9]/g, '');
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[çğışöüâîû]/g, c => TR_MAP[c] || c)
+    .replace(/[^a-z0-9]/g, '');
 }
 
 // <a ...> listesini cikar: [{href, title, text}]

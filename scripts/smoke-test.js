@@ -42,6 +42,10 @@ for (const [name, mod] of [['esheaq', esheaq], ['krmzy', krmzy], ['yoturkish', y
   const ep2 = `<div class="dl-contenti"><a href="https://srv.tokvoy.com/v/1.m3u8">dl</a></div><div id="player"><iframe src="https://tukipasti.com/t/abc"></iframe></div>`;
   const links = yoturkish.__test.collectEpisodeLinks(ep2, 'https://yoturkish.to');
   assert(links.some(u => u.includes('tokvoy')) && links.some(u => u.includes('tukipasti')), 'yoturkish links');
+  const dlHtml = `<table class="tbl1"><tr><td><a href="https://tokvoy.com/d/abc_n">Normal quality</a></td></tr></table><input type="hidden" name="op" value="download_orig"><input type="hidden" name="id" value="abc"><input type="hidden" name="mode" value="n"><input type="hidden" name="hash" value="h1">`;
+  assert(yoturkish.__test.parseDlRows(dlHtml).length === 1, 'yoturkish dl rows');
+  const form = yoturkish.__test.parseDlForm(dlHtml);
+  assert(form.op === 'download_orig' && form.id === 'abc' && form.hash === 'h1', 'yoturkish dl form');
 }
 
 console.log('smoke ok: 3 provider export + parser testleri gecti');

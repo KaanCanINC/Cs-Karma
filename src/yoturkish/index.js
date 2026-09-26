@@ -3,7 +3,7 @@
 // Akis: TMDB -> /?s= -> detay div#episodes a.episod (Episode N) ->
 //       bolum sayfasi: .dl-contenti a + #player/.play iframe + tokvoy/sora regex ->
 //       tukipasti data-hash | engifuosi unpack file | direkt m3u8 passthrough
-import { fetchText, originOf } from '../shared/http.js';
+import { fetchText, originOf, withTimeout, timeoutSignal, DEFAULT_TIMEOUT_MS } from '../shared/http.js';
 import { getTmdbInfo, tmdbApiKeySettingsLayout } from '../shared/tmdb.js';
 import { getAndUnpack, extractFileUrl } from '../shared/unpack.js';
 import { normKey, scoreCandidate } from '../shared/html.js';
@@ -92,25 +92,99 @@ async function resolveTukipasti(url) {
   return { url: video, referer: 'https://tukipasti.com/' };
 }
 
+// engifuosi/tokvoy XUpload zinciri (canli testle dogrulandi):
+// bolum sayfasi dl-contenti -> /d/<id>.html -> tokvoy /d/<id>_<mode> (hidden op/id/mode/hash)
+// -> POST download_orig -> direkt mp4 (video/mp4).
+function parseDlRows(dlHtml) {
+  const rows = [];
+  const table = dlHtml.match(/<table\b[^>]*class=["'][^"']*tbl1[^"']*["'][\s\S]*?<\/table\s*>/i);
+  const scope = table ? table[0] : dlHtml;
+  const re = /<a\b[^>]*href\s*=\s*"([^"]+)"[^>]*>([^<]*)<\/a\s*>/gi;
+  let m;
+  while ((m = re.exec(scope)) !== null) {
+    const href = m[1] || '';
+    const label = (m[2] || '').trim();
+    if (/\/d\//i.test(href)) rows.push({ href, label });
+  }
+  return rows;
+}
+
+function parseDlForm(dlHtml) {
+  const get = (name) => {
+    const m = dlHtml.match(new RegExp(`<input[^>]*name=["']${name}["'][^>]*value=["']([^"']*)["']`, 'i'))
+      || dlHtml.match(new RegExp(`<input[^>]*value=["']([^"']*)["'][^>]*name=["']${name}["']`, 'i'));
+    return m ? m[1] : '';
+  };
+  return { op: get('op'), id: get('id'), mode: get('mode'), hash: get('hash') };
+}
+
+function encodeForm(fields) {
+  return Object.keys(fields)
+    .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(fields[k])}`)
+    .join('&');
+}
+
+async function postForm(url, referer, fields) {
+  return await withTimeout((async () => {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        'Accept': 'text/html,*/*',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Referer': referer
+      },
+      body: encodeForm(fields),
+      signal: timeoutSignal(DEFAULT_TIMEOUT_MS)
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status} POST ${url}`);
+    return await res.text();
+  })(), DEFAULT_TIMEOUT_MS, url);
+}
+
+function extractMp4(html) {
+  const m = html.match(/https?:\/\/[^\s"'<>]+\.mp4[^\s"'<>]*/i);
+  return m ? m[0].replace(/&amp;/g, '&') : '';
+}
+
+async function resolveDownloadServer(dlUrl) {
+  const page = await fetchText(dlUrl, MAIN_URL + '/');
+  const rows = parseDlRows(page);
+  const out = [];
+  for (const row of rows.slice(0, 4)) {
+    try {
+      const dlPageUrl = /^https?:\/\//i.test(row.href) ? row.href : originOf(dlUrl) + row.href;
+      const dlPage = await fetchText(dlPageUrl, dlUrl);
+      const form = parseDlForm(dlPage);
+      if (!form.op || !form.id || !form.hash) continue;
+      const posted = await postForm(dlPageUrl, dlPageUrl, form);
+      const mp4 = extractMp4(posted);
+      if (!mp4) continue;
+      const q = /1080|fhd|uhd/i.test(row.label) ? '1080p' : (/720|hd/i.test(row.label) ? '720p' : (/480|normal/i.test(row.label) ? '480p' : 'Auto'));
+      out.push({ url: mp4, referer: originOf(dlPageUrl) + '/', label: `SERVER ${row.label || 'mp4'}`, quality: q });
+    } catch { /* siradaki satir */ }
+  }
+  return out;
+}
+
 async function resolveEngifuosi(url) {
-  const page = await fetchText(url, MAIN_URL + '/');
-  const unpacked = getAndUnpack(page);
-  const file = extractFileUrl(unpacked);
-  if (!file) return null;
-  return { url: file, referer: 'https://engifuosi.com/' };
+  const rs = await resolveDownloadServer(url);
+  return rs.length ? { url: rs[0].url, referer: rs[0].referer, extra: rs.slice(1) } : null;
 }
 
 async function resolveLink(u) {
   if (/\.m3u8(\?|$)/i.test(u) || /\/sora\//i.test(u)) {
     return { url: u, referer: `${MAIN_URL}/`, label: /tokvoy|sora/i.test(u) ? 'Direct' : 'Stream' };
   }
+  if (/engifuosi\.|tokvoy\.|\/d\//i.test(u)) {
+    try {
+      const rs = await resolveDownloadServer(u);
+      if (rs.length) return { multi: rs };
+    } catch { /* fallback asagi */ }
+  }
   if (/tukipasti\./i.test(u)) {
     const r = await resolveTukipasti(u);
     return r ? { ...r, label: 'TukiPasti' } : null;
-  }
-  if (/engifuosi\./i.test(u)) {
-    const r = await resolveEngifuosi(u);
-    return r ? { ...r, label: 'Engifuosi' } : null;
   }
   // diger hostlar (rufiiguta/kitraskimisi): generic unpack dene
   try {
@@ -156,19 +230,25 @@ async function getStreams(tmdbId, mediaType = 'tv', season = 1, episode = 1) {
       try { epPage = await fetchText(ep.url, hit.url); } catch { continue; }
       const links = collectEpisodeLinks(epPage, domain);
       const out = [];
+      const pushStream = (url, referer, label, quality) => {
+        if (!url || !/^https?:\/\//i.test(url)) return;
+        out.push({
+          name: `YoTurkish ${label || ''}`.trim(),
+          title: `${hit.title} S${season || 1}E${epNo}`,
+          url,
+          quality: quality || 'Auto',
+          provider: PROVIDER_ID,
+          type: /\.m3u8/i.test(url) || /\/sora\//i.test(url) ? 'm3u8' : 'mp4',
+          headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': referer, 'Origin': originOf(referer) }
+        });
+      };
       for (const u of links.slice(0, 10)) {
         try {
           const r = await resolveLink(u);
-          if (!r || !r.url) continue;
-          out.push({
-            name: `YoTurkish ${r.label || ''}`.trim(),
-            title: `${hit.title} S${season || 1}E${epNo}`,
-            url: r.url,
-            quality: 'Auto',
-            provider: PROVIDER_ID,
-            type: /\.m3u8/i.test(r.url) || /\/sora\//i.test(r.url) ? 'm3u8' : 'mp4',
-            headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': r.referer, 'Origin': originOf(r.referer) }
-          });
+          if (!r) continue;
+          if (r.multi) { r.multi.forEach(x => pushStream(x.url, x.referer, x.label, x.quality)); continue; }
+          if (!r.url) continue;
+          pushStream(r.url, r.referer, r.label, r.quality);
         } catch { /* siradaki */ }
       }
       if (out.length) return out;
@@ -181,4 +261,4 @@ async function onSettings() { return [...tmdbApiKeySettingsLayout()]; }
 async function getSubtitles() { return []; }
 
 module.exports = { getStreams, getSubtitles, onSettings };
-module.exports.__test = { parseSearch, parseEpisodes, collectEpisodeLinks, normKey };
+module.exports.__test = { parseSearch, parseEpisodes, collectEpisodeLinks, parseDlRows, parseDlForm, normKey };

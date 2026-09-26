@@ -1,4 +1,4 @@
-/** yoturkish - Cs-Karma Nuvio port, built 2026-09-26T10:46:30.864Z */
+/** yoturkish - Cs-Karma Nuvio port, built 2026-09-26T11:22:58.711Z */
 var __defProp = Object.defineProperty;
 var __defProps = Object.defineProperties;
 var __getOwnPropDescs = Object.getOwnPropertyDescriptors;
@@ -288,11 +288,9 @@ function extractFileUrl(unpackedHtml) {
 }
 
 // src/shared/html.js
-function normTitle(s) {
-  return String(s || "").toLowerCase().replace(/&amp;/g, "&").replace(/&#\d+;/g, " ").replace(/[^a-z0-9\u00e7\u011f\u0131\u00f6\u015f\u00fc ]/gi, " ").replace(/\s+/g, " ").trim();
-}
+var TR_MAP = { "\xE7": "c", "\u011F": "g", "\u0131": "i", "\xF6": "o", "\u015F": "s", "\xFC": "u", "\xE2": "a", "\xEE": "i", "\xFB": "u" };
 function normKey(s) {
-  return normTitle(s).replace(/[^a-z0-9]/g, "");
+  return String(s || "").toLowerCase().replace(/[çğışöüâîû]/g, (c) => TR_MAP[c] || c).replace(/[^a-z0-9]/g, "");
 }
 function scoreCandidate(candTitle, targets, candYear, year) {
   const ck = normKey(candTitle);
@@ -405,14 +403,76 @@ function resolveTukipasti(url) {
     return { url: video, referer: "https://tukipasti.com/" };
   });
 }
-function resolveEngifuosi(url) {
+function parseDlRows(dlHtml) {
+  const rows = [];
+  const table = dlHtml.match(/<table\b[^>]*class=["'][^"']*tbl1[^"']*["'][\s\S]*?<\/table\s*>/i);
+  const scope = table ? table[0] : dlHtml;
+  const re = /<a\b[^>]*href\s*=\s*"([^"]+)"[^>]*>([^<]*)<\/a\s*>/gi;
+  let m;
+  while ((m = re.exec(scope)) !== null) {
+    const href = m[1] || "";
+    const label = (m[2] || "").trim();
+    if (/\/d\//i.test(href))
+      rows.push({ href, label });
+  }
+  return rows;
+}
+function parseDlForm(dlHtml) {
+  const get = (name) => {
+    const m = dlHtml.match(new RegExp(`<input[^>]*name=["']${name}["'][^>]*value=["']([^"']*)["']`, "i")) || dlHtml.match(new RegExp(`<input[^>]*value=["']([^"']*)["'][^>]*name=["']${name}["']`, "i"));
+    return m ? m[1] : "";
+  };
+  return { op: get("op"), id: get("id"), mode: get("mode"), hash: get("hash") };
+}
+function encodeForm(fields) {
+  return Object.keys(fields).map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(fields[k])}`).join("&");
+}
+function postForm(url, referer, fields) {
   return __async(this, null, function* () {
-    const page = yield fetchText(url, MAIN_URL + "/");
-    const unpacked = getAndUnpack(page);
-    const file = extractFileUrl(unpacked);
-    if (!file)
-      return null;
-    return { url: file, referer: "https://engifuosi.com/" };
+    return yield withTimeout((() => __async(this, null, function* () {
+      const res = yield fetch(url, {
+        method: "POST",
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+          "Accept": "text/html,*/*",
+          "Content-Type": "application/x-www-form-urlencoded",
+          "Referer": referer
+        },
+        body: encodeForm(fields),
+        signal: timeoutSignal(DEFAULT_TIMEOUT_MS)
+      });
+      if (!res.ok)
+        throw new Error(`HTTP ${res.status} POST ${url}`);
+      return yield res.text();
+    }))(), DEFAULT_TIMEOUT_MS, url);
+  });
+}
+function extractMp4(html) {
+  const m = html.match(/https?:\/\/[^\s"'<>]+\.mp4[^\s"'<>]*/i);
+  return m ? m[0].replace(/&amp;/g, "&") : "";
+}
+function resolveDownloadServer(dlUrl) {
+  return __async(this, null, function* () {
+    const page = yield fetchText(dlUrl, MAIN_URL + "/");
+    const rows = parseDlRows(page);
+    const out = [];
+    for (const row of rows.slice(0, 4)) {
+      try {
+        const dlPageUrl = /^https?:\/\//i.test(row.href) ? row.href : originOf(dlUrl) + row.href;
+        const dlPage = yield fetchText(dlPageUrl, dlUrl);
+        const form = parseDlForm(dlPage);
+        if (!form.op || !form.id || !form.hash)
+          continue;
+        const posted = yield postForm(dlPageUrl, dlPageUrl, form);
+        const mp4 = extractMp4(posted);
+        if (!mp4)
+          continue;
+        const q = /1080|fhd|uhd/i.test(row.label) ? "1080p" : /720|hd/i.test(row.label) ? "720p" : /480|normal/i.test(row.label) ? "480p" : "Auto";
+        out.push({ url: mp4, referer: originOf(dlPageUrl) + "/", label: `SERVER ${row.label || "mp4"}`, quality: q });
+      } catch (e) {
+      }
+    }
+    return out;
   });
 }
 function resolveLink(u) {
@@ -420,13 +480,17 @@ function resolveLink(u) {
     if (/\.m3u8(\?|$)/i.test(u) || /\/sora\//i.test(u)) {
       return { url: u, referer: `${MAIN_URL}/`, label: /tokvoy|sora/i.test(u) ? "Direct" : "Stream" };
     }
+    if (/engifuosi\.|tokvoy\.|\/d\//i.test(u)) {
+      try {
+        const rs = yield resolveDownloadServer(u);
+        if (rs.length)
+          return { multi: rs };
+      } catch (e) {
+      }
+    }
     if (/tukipasti\./i.test(u)) {
       const r = yield resolveTukipasti(u);
       return r ? __spreadProps(__spreadValues({}, r), { label: "TukiPasti" }) : null;
-    }
-    if (/engifuosi\./i.test(u)) {
-      const r = yield resolveEngifuosi(u);
-      return r ? __spreadProps(__spreadValues({}, r), { label: "Engifuosi" }) : null;
     }
     try {
       const page = yield fetchText(u, `${MAIN_URL}/`);
@@ -487,20 +551,31 @@ function getStreams(tmdbId, mediaType = "tv", season = 1, episode = 1) {
         }
         const links = collectEpisodeLinks(epPage, domain);
         const out = [];
+        const pushStream = (url, referer, label, quality) => {
+          if (!url || !/^https?:\/\//i.test(url))
+            return;
+          out.push({
+            name: `YoTurkish ${label || ""}`.trim(),
+            title: `${hit.title} S${season || 1}E${epNo}`,
+            url,
+            quality: quality || "Auto",
+            provider: PROVIDER_ID,
+            type: /\.m3u8/i.test(url) || /\/sora\//i.test(url) ? "m3u8" : "mp4",
+            headers: { "User-Agent": "Mozilla/5.0", "Referer": referer, "Origin": originOf(referer) }
+          });
+        };
         for (const u of links.slice(0, 10)) {
           try {
             const r = yield resolveLink(u);
-            if (!r || !r.url)
+            if (!r)
               continue;
-            out.push({
-              name: `YoTurkish ${r.label || ""}`.trim(),
-              title: `${hit.title} S${season || 1}E${epNo}`,
-              url: r.url,
-              quality: "Auto",
-              provider: PROVIDER_ID,
-              type: /\.m3u8/i.test(r.url) || /\/sora\//i.test(r.url) ? "m3u8" : "mp4",
-              headers: { "User-Agent": "Mozilla/5.0", "Referer": r.referer, "Origin": originOf(r.referer) }
-            });
+            if (r.multi) {
+              r.multi.forEach((x) => pushStream(x.url, x.referer, x.label, x.quality));
+              continue;
+            }
+            if (!r.url)
+              continue;
+            pushStream(r.url, r.referer, r.label, r.quality);
           } catch (e) {
           }
         }
@@ -524,4 +599,4 @@ function getSubtitles() {
   });
 }
 module.exports = { getStreams, getSubtitles, onSettings };
-module.exports.__test = { parseSearch, parseEpisodes, collectEpisodeLinks, normKey };
+module.exports.__test = { parseSearch, parseEpisodes, collectEpisodeLinks, parseDlRows, parseDlForm, normKey };

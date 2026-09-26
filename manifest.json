@@ -39,8 +39,8 @@
     {
       "id": "yoturkish",
       "name": "YoTurkish (Beta)",
-      "description": "Turk dizileri (EN altyazili) — yoturkish.to. BETA: WebView'siz fetch portu, bazi bolumlerde kaynaksiz donebilir.",
-      "version": "0.1.0",
+      "description": "Turk dizileri (EN altyazili) — yoturkish.to. BETA: SERVER 1 indirme zinciriyle cozunur, diger serverlar henuz yok.",
+      "version": "0.1.1",
       "author": "cs-karma",
       "supportedTypes": ["tv"],
       "filename": "providers/yoturkish.js",
